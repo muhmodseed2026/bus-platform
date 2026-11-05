@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>منصة مشرفي الحركة</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2322272E'/%3E%3Crect x='6' y='9' width='20' height='12' rx='2' fill='%23F2B705'/%3E%3Ccircle cx='11' cy='23' r='2.5' fill='%23F2B705'/%3E%3Ccircle cx='21' cy='23' r='2.5' fill='%23F2B705'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<main id="login" class="login" hidden>
+  <form id="loginForm" class="login-card" autocomplete="on">
+    <div class="login-stripe" aria-hidden="true"></div>
+    <img class="login-logo" src="logo.png" alt="شعار ابن رشد التعليمية القابضة" width="350" height="212">
+    <h1>دخول المشرفين</h1>
+    <p class="muted">سجّل الدخول لتسجيل الحركة والصيانة والسائقين.</p>
+    <label class="field"><span>اسم المستخدم</span>
+      <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required dir="ltr"></label>
+    <label class="field"><span>كلمة السر</span>
+      <input name="password" type="password" autocomplete="current-password" required dir="ltr"></label>
+    <p id="loginError" class="form-error" role="alert"></p>
+    <button class="btn primary wide" type="submit">دخول</button>
+  </form>
+</main>
+
+<div id="app" class="shell" hidden>
+  <aside class="side">
+    <div class="brand">
+      <div class="logo-panel"><img src="logo.png" alt="شعار ابن رشد التعليمية القابضة" width="350" height="212"></div>
+      <div class="brand-text"><strong>مشرفو الحركة</strong><small id="roleLabel"></small></div>
+    </div>
+    <nav id="nav" aria-label="القائمة الرئيسية"></nav>
+    <div class="side-foot">
+      <div id="whoami" class="whoami"></div>
+      <button class="linklike" id="btnPassword" type="button">تغيير كلمة السر</button>
+      <button class="linklike" id="btnLogout" type="button">تسجيل الخروج</button>
+    </div>
+  </aside>
+  <main id="view" class="view" tabindex="-1"></main>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
