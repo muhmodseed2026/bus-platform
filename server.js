@@ -23,17 +23,33 @@ const MAX_UPLOAD = 5 * 1024 * 1024;
 /* DATABASE_URL (اختياري): مسار ملف SQLite فقط، مثل sqlite:///var/data/platform.db (مطلق) أو sqlite:data/platform.db (نسبي).
  * لو لم يُحدَّد يُستخدم DATA_DIR/platform.db كما كان. المرفقات تبقى في DATA_DIR/uploads. */
 function dbPathFromEnv() {
-  const raw = (process.env.DATABASE_URL || '').trim();
-  if (!raw) return path.join(DATA_DIR, 'platform.db');
-  const m = raw.match(/^sqlite:(.*)$/i);
-  if (!m) { console.error('DATABASE_URL يدعم ملفات SQLite فقط، بصيغة مثل sqlite:///var/data/platform.db'); process.exit(1); }
-  let p = m[1].replace(/^\/\//, '').split(/[?#]/)[0];
-  try { p = decodeURIComponent(p); } catch { /* اتركه كما هو */ }
-  if (process.platform === 'win32') p = p.replace(/^\/([A-Za-z]:)/, '$1');
-  if (!p || /^\/*:memory:$/.test(p)) { console.error('DATABASE_URL يجب أن يحدد مسار ملف، مثل sqlite:///var/data/platform.db'); process.exit(1); }
-  return path.resolve(p);
+    const raw = (process.env.DATABASE_URL || '').trim();
+    
+    // إذا كان الرابط فارغاً، نستخدم المسار المحلي الافتراضي
+    if (!raw) {
+        return path.join(DATA_DIR, 'platform.db');
+    }
+    
+    // إذا كان الرابط سحابياً لـ Turso نمرره كما هو مباشرة
+    if (raw.startsWith('libsql://') || raw.startsWith('https://')) {
+        return raw;
+    }
+    
+    // للروابط المحلية التقليدية
+    const m = raw.match(/^sqlite:\/\/(.*)$/i);
+    if (m) {
+        let p = m[1].replace(/^\/\/\//, '').split(/[?#]/)[0];
+        try { p = decodeURIComponent(p); } catch { }
+        if (process.platform === 'win32') p = p.replace(/^\/([A-Za-z]:)/, '$1');
+        return p;
+    } else {
+        console.error('DATABASE_URL صيغة غير مدعومة.');
+        process.exit(1);
+    }
 }
+
 const DB_PATH = dbPathFromEnv();
+
 fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
