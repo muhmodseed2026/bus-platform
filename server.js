@@ -122,7 +122,7 @@ function audit(user, action, entity, refId, detail) {
 if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
   const pw = "IbnRoshd2026";
   const { salt, hash } = hashPassword(pw);
-  db.prepare("INSERT INTO users(name,username,pass_hash,salt,role) VALUES ('المدير','admin',?,?,'admin')").run(hash, salt);
+db.prepare("INSERT OR REPLACE INTO users(name,username,pass,hash,salt,role) VALUES ('المدير','admin',?,?,?,'admin')").run(hash, salt);
   console.log('\n==============================================');
   console.log(' تم إنشاء حساب المدير لأول مرة');
   console.log('   اسم المستخدم : admin');
