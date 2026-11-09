@@ -8,7 +8,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
-const { DatabaseSync } = require('node:sqlite');
+let DatabaseSync;
+try { ({ DatabaseSync } = require('node:sqlite')); }
+catch { console.error('هذه المنصة تحتاج Node.js 22.13 أو أحدث (الإصدار الحالي ' + process.version + '). حدّث إصدار Node في الاستضافة.'); process.exit(1); }
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -18,8 +20,23 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const SESSION_DAYS = 7;
 const MAX_UPLOAD = 5 * 1024 * 1024;
 
+/* DATABASE_URL (اختياري): مسار ملف SQLite فقط، مثل sqlite:///var/data/platform.db (مطلق) أو sqlite:data/platform.db (نسبي).
+ * لو لم يُحدَّد يُستخدم DATA_DIR/platform.db كما كان. المرفقات تبقى في DATA_DIR/uploads. */
+function dbPathFromEnv() {
+  const raw = (process.env.DATABASE_URL || '').trim();
+  if (!raw) return path.join(DATA_DIR, 'platform.db');
+  const m = raw.match(/^sqlite:(.*)$/i);
+  if (!m) { console.error('DATABASE_URL يدعم ملفات SQLite فقط، بصيغة مثل sqlite:///var/data/platform.db'); process.exit(1); }
+  let p = m[1].replace(/^\/\//, '').split(/[?#]/)[0];
+  try { p = decodeURIComponent(p); } catch { /* اتركه كما هو */ }
+  if (process.platform === 'win32') p = p.replace(/^\/([A-Za-z]:)/, '$1');
+  if (!p || /^\/*:memory:$/.test(p)) { console.error('DATABASE_URL يجب أن يحدد مسار ملف، مثل sqlite:///var/data/platform.db'); process.exit(1); }
+  return path.resolve(p);
+}
+const DB_PATH = dbPathFromEnv();
 fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
-const db = new DatabaseSync(path.join(DATA_DIR, 'platform.db'));
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
 
 /* ------------------------------------------------------------------ schema */
@@ -71,7 +88,14 @@ CREATE INDEX IF NOT EXISTS idx_att_owner ON attachments(owner_kind, owner_id);
 {
   const have = db.prepare('PRAGMA table_info(buses)').all().map((c) => c.name);
   for (const col of ['make', 'serial_no']) if (!have.includes(col)) db.exec(`ALTER TABLE buses ADD COLUMN ${col} TEXT`);
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_buses_serial ON buses(serial_no)');
+  /* الرقم التسلسلي الفارغ يُعامل كغير موجود، ولو وُجد تكرار قديم لا نوقف الإقلاع: نكتفي بتحذير ونمنع التكرار الجديد من التطبيق */
+  db.exec("UPDATE buses SET serial_no=NULL WHERE serial_no IS NOT NULL AND TRIM(serial_no)=''");
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_buses_serial ON buses(serial_no)'); }
+  catch (e) {
+    const dups = db.prepare('SELECT serial_no, COUNT(*) c FROM buses WHERE serial_no IS NOT NULL GROUP BY serial_no HAVING c>1').all();
+    console.warn('تحذير: أرقام تسلسلية مكررة بين الباصات، صحّحها من صفحة الباصات:', dups.map((d) => `${d.serial_no} (${d.c})`).join('، '));
+    db.exec('CREATE INDEX IF NOT EXISTS idx_buses_serial_nu ON buses(serial_no)');
+  }
   /* ترقية: فرع المشرف + عدد لترات الوقود */
   const addCol = (table, col, def) => {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
@@ -86,7 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_att_owner ON attachments(owner_kind, owner_id);
 }
 
 /* تنظيف الملفات اليتيمة في مجلد المرفقات (ملفات بدون سجل في القاعدة بسبب فشل سابق) */
-{
+try {
   const dir = path.join(DATA_DIR, 'uploads');
   const known = new Set(db.prepare('SELECT stored FROM attachments').all().map((r) => r.stored));
   let n = 0;
@@ -94,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_att_owner ON attachments(owner_kind, owner_id);
     if (/^[0-9a-f]{32}\.(jpg|png|webp|pdf)$/.test(f) && !known.has(f)) { fs.rmSync(path.join(dir, f), { force: true }); n++; }
   }
   if (n) console.log(`تم حذف ${n} ملف يتيم من المرفقات`);
-}
+} catch (e) { console.warn('تعذّر تنظيف المرفقات اليتيمة (لا يؤثر على التشغيل):', e.message); }
 
 /* ----------------------------------------------------------------- helpers */
 const todayStr = () => new Intl.DateTimeFormat('en-CA', { timeZone: APP_TZ }).format(new Date());
@@ -120,9 +144,9 @@ function audit(user, action, entity, refId, detail) {
 
 /* first run: create the admin account */
 if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
-  const pw = "IbnRoshd2026";
+  const pw = process.env.ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64url');
   const { salt, hash } = hashPassword(pw);
-db.prepare("INSERT OR REPLACE INTO users(name,username,pass,hash,salt,role) VALUES ('المدير','admin',?,?,?,'admin')").run(hash, salt);
+  db.prepare("INSERT INTO users(name,username,pass_hash,salt,role) VALUES ('المدير','admin',?,?,'admin')").run(hash, salt);
   console.log('\n==============================================');
   console.log(' تم إنشاء حساب المدير لأول مرة');
   console.log('   اسم المستخدم : admin');
@@ -322,6 +346,32 @@ function timelineConflict(events) {
   return null;
 }
 
+/* كل التعارضات الموجودة في بيانات باص (للتقرير): قراءة أقل من سابقة، حركتان متداخلتان، مسافة غير معقولة */
+function odometerIssues(busId) {
+  const ev = busOdoEvents(busId, null).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const seg = odoSegmenter(ev), issues = [], maxBefore = new Map();
+  const rec = (e) => ({ record: e.table === 'trips' ? 'حركة' : 'صيانة/وقود', record_id: e.id, table: e.table, date: e.date });
+  let i = 0;
+  while (i < ev.length) {
+    let j = i;
+    while (j < ev.length && ev[j].date === ev[i].date) j++;
+    const group = ev.slice(i, j);
+    for (const e of group) {
+      const m = maxBefore.get(seg(e.date));
+      if (m && e.lo < m.hi) issues.push({ ...rec(e), problem: 'قراءة أقل من قراءة سابقة', reading: e.lo, other_reading: m.hi, other_date: m.date });
+      if (e.interval && e.hi - e.lo > MAX_TRIP_KM) issues.push({ ...rec(e), problem: 'مسافة أكبر من الحد المعقول', reading: e.hi, other_reading: e.lo, other_date: e.date });
+    }
+    for (let a = 0; a < group.length; a++) for (let b = a + 1; b < group.length; b++) {
+      const x = group[a], y = group[b];
+      if (x.table === 'trips' && y.table === 'trips' && x.interval && y.interval && x.lo < y.hi && x.hi > y.lo)
+        issues.push({ ...rec(y), problem: 'حركة تتداخل مع حركة أخرى في نفس اليوم', reading: y.lo, other_reading: x.lo, other_date: x.date });
+    }
+    for (const e of group) { const s = seg(e.date), m = maxBefore.get(s); if (!m || e.hi > m.hi) maxBefore.set(s, e); }
+    i = j;
+  }
+  return issues;
+}
+
 /* العداد الحالي للباص = آخر قراءة في السلسلة الأخيرة (بعد آخر استبدال للعداد) */
 function currentKm(busId) {
   const ev = busOdoEvents(busId, null);
@@ -379,6 +429,10 @@ function validate(cfg, input, existing, user) {
     return { error: 'عداد النهاية أقل من عداد البداية' };
   if (out.odometer_start != null && out.odometer_end != null && out.odometer_end - out.odometer_start > MAX_TRIP_KM)
     return { error: `المسافة في تسجيل واحد (${out.odometer_end - out.odometer_start} كم) أكبر من الحد المعقول (${MAX_TRIP_KM} كم). راجع قراءتي العداد.` };
+  if (cfg.table === 'buses' && out.serial_no) {
+    const dup = db.prepare('SELECT id FROM buses WHERE serial_no=? AND id!=?').get(out.serial_no, existing ? existing.id : 0);
+    if (dup) return { error: 'الرقم التسلسلي مسجل من قبل لباص آخر' };
+  }
   if (cfg.table === 'trips' || cfg.table === 'maintenance') {
     const e = checkOdometerSequence(cfg.table, out, existing, user);
     if (e) return { error: e };
@@ -1067,6 +1121,16 @@ async function api(req, res, url, p) {
       return sendXlsx(res, 'تقرير-الصيانة-' + todayStr(), 'الصيانة والزيت والوقود', cols.map((c) => c[1]), data);
     }
     return sendJson(res, 200, { rows, totals });
+  }
+  if (p === '/api/reports/odometer' && m === 'GET') {
+    if (!isAdmin(user)) return fail(res, 403, 'للمدير فقط');
+    const rows = [];
+    for (const b of db.prepare('SELECT id,plate FROM buses ORDER BY plate').all())
+      for (const x of odometerIssues(b.id)) rows.push({ bus_id: b.id, plate: b.plate, ...x });
+    if (q.format === 'xlsx')
+      return sendXlsx(res, 'فحص-العدادات-' + todayStr(), 'فحص العدادات', ['الباص', 'نوع السجل', 'التاريخ', 'المشكلة', 'القراءة', 'القراءة المقابلة', 'تاريخها'],
+        rows.map((r) => [r.plate, r.record, r.date, r.problem, r.reading, r.other_reading, r.other_date]));
+    return sendJson(res, 200, { rows });
   }
   if (p === '/api/reports/oil' && m === 'GET') {
     const rows = oilStatus(user);
