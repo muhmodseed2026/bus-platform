@@ -19,7 +19,8 @@ const SESSION_DAYS = 7;
 const MAX_UPLOAD = 5 * 1024 * 1024;
 
 fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
-const db = new DatabaseSync(path.join(DATA_DIR, 'platform.db'));
+// تعديل سحابي حاسم: ربط السيرفر مباشرة بقاعدة بيانات Turso SQLite المستقرة والمجانية دائمًا
+const db = new DatabaseSync("libsql://ibnroshd-bus-app-muhmodseed2026.aws-eu-central-1.turso.io");
 db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
 
 /* ------------------------------------------------------------------ schema */
@@ -67,6 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_trips_sup ON trips(supervisor_id);
 CREATE INDEX IF NOT EXISTS idx_maint_bus ON maintenance(bus_id);
 CREATE INDEX IF NOT EXISTS idx_att_owner ON attachments(owner_kind, owner_id);
 `);
+
 /* ترقية قواعد البيانات القديمة: أعمدة الماركة والرقم التسلسلي للباص */
 {
   const have = db.prepare('PRAGMA table_info(buses)').all().map((c) => c.name);
@@ -165,6 +167,3 @@ const ENT = {
       form_no: { t: 'text', max: 40, label: 'رقم استمارة السائق' },
       form_expiry: { t: 'date', label: 'انتهاء استمارة السائق' },
       bus_id: { t: 'ref', ref: 'buses', label: 'الباص المفوض عليه' },
-      active: { t: 'bool', def: 1, label: 'الحالة' },
-      notes: { t: 'text', max: 1000, label: 'ملاحظات' },
-    },
