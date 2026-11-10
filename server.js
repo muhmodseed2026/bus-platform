@@ -23,33 +23,17 @@ const MAX_UPLOAD = 5 * 1024 * 1024;
 /* DATABASE_URL (اختياري): مسار ملف SQLite فقط، مثل sqlite:///var/data/platform.db (مطلق) أو sqlite:data/platform.db (نسبي).
  * لو لم يُحدَّد يُستخدم DATA_DIR/platform.db كما كان. المرفقات تبقى في DATA_DIR/uploads. */
 function dbPathFromEnv() {
-    const raw = (process.env.DATABASE_URL || '').trim();
-    
-    // إذا كان الرابط فارغاً، نستخدم المسار المحلي الافتراضي
-    if (!raw) {
-        return path.join(DATA_DIR, 'platform.db');
-    }
-    
-    // إذا كان الرابط سحابياً لـ Turso نمرره كما هو مباشرة
-    if (raw.startsWith('libsql://') || raw.startsWith('https://')) {
-        return raw;
-    }
-    
-    // للروابط المحلية التقليدية
-    const m = raw.match(/^sqlite:\/\/(.*)$/i);
-    if (m) {
-        let p = m[1].replace(/^\/\/\//, '').split(/[?#]/)[0];
-        try { p = decodeURIComponent(p); } catch { }
-        if (process.platform === 'win32') p = p.replace(/^\/([A-Za-z]:)/, '$1');
-        return p;
-    } else {
-        console.error('DATABASE_URL صيغة غير مدعومة.');
-        process.exit(1);
-    }
+  const raw = (process.env.DATABASE_URL || '').trim();
+  if (!raw) return path.join(DATA_DIR, 'platform.db');
+  const m = raw.match(/^sqlite:(.*)$/i);
+  if (!m) { console.error('DATABASE_URL يدعم ملفات SQLite فقط، بصيغة مثل sqlite:///var/data/platform.db'); process.exit(1); }
+  let p = m[1].replace(/^\/\//, '').split(/[?#]/)[0];
+  try { p = decodeURIComponent(p); } catch { /* اتركه كما هو */ }
+  if (process.platform === 'win32') p = p.replace(/^\/([A-Za-z]:)/, '$1');
+  if (!p || /^\/*:memory:$/.test(p)) { console.error('DATABASE_URL يجب أن يحدد مسار ملف، مثل sqlite:///var/data/platform.db'); process.exit(1); }
+  return path.resolve(p);
 }
-
 const DB_PATH = dbPathFromEnv();
-
 fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
@@ -533,6 +517,29 @@ function getSettings() {
   for (const r of db.prepare('SELECT key,value FROM settings').all()) if (r.key in out) out[r.key] = r.value;
   return out;
 }
+/* توقيعات التقارير: اليمين = مشرف الفرع، اليسار = مسؤول الخدمات اللوجستية (من الإعدادات).
+ * مشرف الفرع يُحدَّد من نطاق التقرير نفسه: مشرف يرى بياناته فقط ← هو نفسه؛ المدير مع فلتر مشرف ← ذلك المشرف؛
+ * المدير مع فلتر فرع ← المشرفون النشطون في الفرع؛ بدون فلتر ← يُترك الاسم فارغاً للتوقيع باليد. */
+function signersFor(user, scope) {
+  const out = { branch_supervisor: '', branch: '', logistics_officer: getSettings().logistics_officer || '' };
+  const one = (id) => db.prepare('SELECT u.name, br.name AS branch FROM users u LEFT JOIN branches br ON br.id=u.branch_id WHERE u.id=?').get(id);
+  let supId = null;
+  if (!isAdmin(user)) supId = user.id;
+  else if (scope.supervisor_id != null) supId = scope.supervisor_id;
+  if (supId !== null) {
+    const r = one(supId);
+    if (r) { out.branch_supervisor = r.name; out.branch = r.branch || ''; }
+  } else if (isAdmin(user) && scope.branch_id != null) {
+    const br = db.prepare('SELECT name FROM branches WHERE id=?').get(scope.branch_id);
+    if (br) {
+      out.branch = br.name;
+      out.branch_supervisor = db.prepare("SELECT name FROM users WHERE branch_id=? AND role='supervisor' AND active=1 ORDER BY name").all(scope.branch_id).map((x) => x.name).join(' / ');
+    }
+  }
+  return out;
+}
+const reportScope = (q) => ({ supervisor_id: intOrNull(q.supervisor_id), branch_id: intOrNull(q.branch_id) });
+
 /* يضيف باصاً جديداً ثم يحفظ السائق المربوط به في عملية واحدة: لو فشل أي منهما لا يُحفظ شيء */
 function withNewBus(user, body, run) {
   const nb = body.new_bus;
@@ -652,7 +659,7 @@ function busReport(user, id, q) {
     km_left: lastOil.next_oil_km != null ? lastOil.next_oil_km - curKm : null,
   } : null;
   const drivers = db.prepare('SELECT name, phone, national_id FROM drivers WHERE bus_id=? AND active=1 ORDER BY name').all(id);
-  return { bus, drivers, today: todayStr(), period: { from, to }, trips, fuel, oil, maintenance: maint, totals, oil_status, officers: getSettings(), prepared_by: user.name };
+  return { bus, drivers, today: todayStr(), period: { from, to }, trips, fuel, oil, maintenance: maint, totals, oil_status, officers: getSettings(), signers: signersFor(user, { supervisor_id: bus.supervisor_id }), prepared_by: user.name };
 }
 
 /* ---------------------------------------------------------- xlsx (no deps) */
@@ -1118,7 +1125,7 @@ async function api(req, res, url, p) {
       rows.push(['الإجمالي', r.totals.records, r.totals.trips, r.totals.km]);
       return sendXlsx(res, 'تقرير-الحركة-' + todayStr(), 'تقرير الحركة', [r.group_label, 'عدد التسجيلات', 'عدد الرحلات', 'المسافة (كم)'], rows);
     }
-    return sendJson(res, 200, r);
+    return sendJson(res, 200, { ...r, signers: signersFor(user, reportScope(q)) });
   }
   if (p === '/api/reports/maintenance' && m === 'GET') {
     const rows = listEntity(user, 'maintenance', q, true);
@@ -1136,7 +1143,7 @@ async function api(req, res, url, p) {
       data.push(total);
       return sendXlsx(res, 'تقرير-الصيانة-' + todayStr(), 'الصيانة والزيت والوقود', cols.map((c) => c[1]), data);
     }
-    return sendJson(res, 200, { rows, totals });
+    return sendJson(res, 200, { rows, totals, signers: signersFor(user, reportScope(q)) });
   }
   if (p === '/api/reports/odometer' && m === 'GET') {
     if (!isAdmin(user)) return fail(res, 403, 'للمدير فقط');
@@ -1156,7 +1163,7 @@ async function api(req, res, url, p) {
         ['الباص', 'المشرف', 'آخر تغيير', 'عداد آخر تغيير', 'الزيت القادم عند', 'العداد الحالي', 'المتبقي (كم)', 'الحالة'],
         rows.map((r) => [r.plate, r.supervisor_name, r.last_oil_date, r.last_oil_odo, r.next_oil_km, r.current_km, r.km_left, S[r.state]]));
     }
-    return sendJson(res, 200, { rows });
+    return sendJson(res, 200, { rows, signers: signersFor(user, {}) });
   }
 
   return fail(res, 404, 'غير موجود');
