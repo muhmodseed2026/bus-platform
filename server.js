@@ -8,10 +8,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
-let DatabaseSync;
-try { ({ DatabaseSync } = require('node:sqlite')); }
-catch { console.error('هذه المنصة تحتاج Node.js 22.13 أو أحدث (الإصدار الحالي ' + process.version + '). حدّث إصدار Node في الاستضافة.'); process.exit(1); }
+const { createClient } = require('@libsql/client');
 
+const client = createClient({
+  url: process.env.DATABASE_URL,
+  authToken: process.env.DATABASE_AUTH_TOKEN,
+});
+
+const DatabaseSync = function() {
+  return client;
+};
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const APP_TZ = process.env.APP_TZ || 'Asia/Riyadh';
@@ -41,12 +47,9 @@ function dbPathFromEnv() {
 }
 const DB_PATH = dbPathFromEnv();
 fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
-
+const db = DatabaseSync();
 /* ------------------------------------------------------------------ schema */
-db.exec(`
+db.execute(`
 CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE,
   pass_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'supervisor',
