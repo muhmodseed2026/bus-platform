@@ -9,6 +9,9 @@
   "engines": {
     "node": ">=22.13"
   },
+  "dependencies": {
+    "@libsql/client": "^0.14.0"
+  },
   "license": "UNLICENSED",
   "private": true
 }
