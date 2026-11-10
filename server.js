@@ -16,29 +16,26 @@ const client = createClient({
 });
 
 const DatabaseSync = function() {
+  // هذا الجزء يقوم بإضافة دالة prepare المتوافقة مع تيرسو تلقائياً لحل المشكلة
+  if (!client.prepare) {
+    client.prepare = function(sql) {
+      return {
+        get: async function(params) {
+          const res = await client.execute({ sql, args: params || [] });
+          return res.rows[0];
+        },
+        run: async function(params) {
+          return await client.execute({ sql, args: params || [] });
+        },
+        all: async function(params) {
+          const res = await client.execute({ sql, args: params || [] });
+          return res.rows;
+        }
+      };
+    };
+  }
   return client;
 };
-const PORT = Number(process.env.PORT) || 3000;
-const HOST = process.env.HOST || '0.0.0.0';
-const APP_TZ = process.env.APP_TZ || 'Asia/Riyadh';
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const PUBLIC_DIR = path.join(__dirname, 'public');
-const SESSION_DAYS = 7;
-const MAX_UPLOAD = 5 * 1024 * 1024;
-
-/* DATABASE_URL (اختياري): مسار ملف SQLite فقط، مثل sqlite:///var/data/platform.db (مطلق) أو sqlite:data/platform.db (نسبي).
- * لو لم يُحدَّد يُستخدم DATA_DIR/platform.db كما كان. المرفقات تبقى في DATA_DIR/uploads. */
-function dbPathFromEnv() {
-  const raw = (process.env.DATABASE_URL || '').trim();
-  if (!raw) return path.join(DATA_DIR, 'platform.db');
-  /* مسار عادي بدون بروتوكول (/var/data/platform.db أو ./data/platform.db أو C:\data\platform.db) نقبله كما هو */
-  const plain = /^(\/|\.{1,2}[\\/]|[A-Za-z]:[\\/])/.test(raw) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(raw);
-  const m = plain ? [raw, raw] : raw.match(/^(?:sqlite|file):(.*)$/i);
-  if (!m) {
-    /* قيمة لقاعدة أخرى (مثل postgres:// التي تضعها بعض الاستضافات تلقائياً): لا نوقف التشغيل، نتجاهلها ونستخدم DATA_DIR */
-    console.warn(`تحذير: تم تجاهل DATABASE_URL لأنها ليست ملف SQLite (البروتوكول ${(raw.match(/^([a-z][a-z0-9+.-]*):/i) || [])[1] || 'غير معروف'}). تُستخدم القاعدة في DATA_DIR. لتحديد المسار استخدم sqlite:///var/data/platform.db`);
-    return path.join(DATA_DIR, 'platform.db');
-  }
   let p = plain ? m[1] : m[1].replace(/^\/\//, '').split(/[?#]/)[0];
   try { p = decodeURIComponent(p); } catch { /* اتركه كما هو */ }
   if (process.platform === 'win32') p = p.replace(/^\/([A-Za-z]:)/, '$1');
