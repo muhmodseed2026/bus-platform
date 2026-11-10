@@ -48,7 +48,7 @@ function dbPathFromEnv() {
     }
 }
 
-const DB_PATH = dbPathFromEnv();const DB_PATH = dbPathFromEnv();
+const DB_PATH = dbPathFromEnv();
 fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
