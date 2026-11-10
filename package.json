@@ -1,7 +1,7 @@
 {
   "name": "bus-platform",
   "version": "1.0.0",
-  "description": "منصة مشرفي حركة الباصات: تسجيل الحركة والصيانة والزيت والسائقين مع تقارير للمدير",
+  "description": "منصة مشرفي حركة الباصات : تسجيل الحركة والصيانة والزيت والسائقين مع تقارير للمدير",
   "main": "server.js",
   "scripts": {
     "start": "node --no-warnings server.js"
@@ -9,9 +9,9 @@
   "engines": {
     "node": ">=22.13"
   },
+  "license": "UNLICENSED",
+  "private": true,
   "dependencies": {
     "@libsql/client": "^0.14.0"
-  },
-  "license": "UNLICENSED",
-  "private": true
+  }
 }
