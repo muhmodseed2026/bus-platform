@@ -8,60 +8,46 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
-let DatabaseSync;
-try { ({ DatabaseSync } = require('node:sqlite')); }
-catch { console.error('هذه المنصة تحتاج Node.js 22.13 أو أحدث (الإصدار الحالي ' + process.version + '). حدّث إصدار Node في الاستضافة.'); process.exit(1); }
+const { createClient } = require('@libsql/client');
+const { DatabaseSync } = require('node:sqlite');
 
-const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+const PORT = Number(process.env.PORT) || 3000;
 const APP_TZ = process.env.APP_TZ || 'Asia/Riyadh';
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const SESSION_DAYS = 7;
-const MAX_UPLOAD = 5 * 1024 * 1024;
 
-/* DATABASE_URL (اختياري): مسار ملف SQLite فقط، مثل sqlite:///var/data/platform.db (مطلق) أو sqlite:data/platform.db (نسبي).
- * لو لم يُحدَّد يُستخدم DATA_DIR/platform.db كما كان. المرفقات تبقى في DATA_DIR/uploads. */
-function dbPathFromEnv() {
-    const raw = (process.env.DATABASE_URL || '').trim();
-    
-    if (!raw) {
-        return path.join(DATA_DIR, 'platform.db');
-    }
-    
-    if (raw.startsWith('libsql://') || raw.startsWith('https://')) {
-        return raw;
-    }
-    
-    const m = raw.match(/^sqlite:\/\/(.*)$/i);
-    if (m) {
-        let p = m.replace(/^\/\/\//, '').split(/[?#]/);
-        try { p = decodeURIComponent(p); } catch { }
-        if (process.platform === 'win32') p = p.replace(/^\/([A-Za-z]:)/, '$1');
-        return p;
-    } else {
-        console.error('DATABASE_URL صيغة غير مدعومة.');
-        process.exit(1);
-    }
 const DB_PATH = dbPathFromEnv();
-fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+let db;
 
-/* ------------------------------------------------------------------ schema */
-db.exec(`
-CREATE TABLE IF NOT EXISTS users(
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE,
-  pass_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'supervisor',
-  active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')));
-CREATE TABLE IF NOT EXISTS sessions(
-  token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS buses(
-  id INTEGER PRIMARY KEY, plate TEXT NOT NULL UNIQUE, fleet_no TEXT, make TEXT, model TEXT, serial_no TEXT, capacity INTEGER,
-  reg_form_no TEXT, reg_expiry TEXT, inspection_due TEXT, status TEXT NOT NULL DEFAULT 'active', notes TEXT,
-  supervisor_id INTEGER NOT NULL REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+if (DB_PATH.startsWith('libsql://') || DB_PATH.startsWith('https://')) {
+    const client = createClient({
+        url: DB_PATH,
+        authToken: process.env.TURSO_AUTH_TOKEN
+    });
+    
+    db = {
+        exec: (sql) => client.execute(sql),
+        prepare: (sql) => {
+            return {
+                all: (...args) => {
+                    const res = client.execute({ sql, args });
+                    return res.rows;
+                },
+                run: (...args) => client.execute({ sql, args }),
+                get: (...args) => {
+                    const res = client.execute({ sql, args });
+                    return res.rows[0] || null;
+                }
+            };
+        }
+    };
+} else {
+    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+    db = new DatabaseSync(DB_PATH);
+    db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+}  created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
 CREATE TABLE IF NOT EXISTS drivers(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, national_id TEXT, phone TEXT, license_no TEXT, license_expiry TEXT,
   form_no TEXT, form_expiry TEXT, bus_id INTEGER REFERENCES buses(id) ON DELETE SET NULL,
